@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#04102c">
+<title>Clue Dive · Fugio</title>
+<meta name="description" content="Clue Dive: a pixel-art word game for the whole class. The teacher's big screen shows the class submarine diving into the deep sea; students answer on their phones, and fast right answers call up sea monsters.">
+<link rel="icon" href="icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Pixelify+Sans:wght@500;700&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="dive.css?v=1">
+<script src="lib/qrcode.js"></script>
+</head>
+<body>
+<canvas id="sky" aria-hidden="true"></canvas>
+<main id="app"></main>
+<noscript>Clue Dive needs JavaScript.</noscript>
+<script type="module">
+  // /dive/host (or ?host) is the teacher's big screen; /dive/ (and the QR code, /dive/?code=123456) is a student's phone
+  const host = /\/host(\.html)?\/?$/.test(location.pathname) || new URLSearchParams(location.search).has('host');
+  document.body.classList.add(host ? 'is-host' : 'is-player');
+  import(host ? './host.js?v=2' : './play.js?v=1');
+</script>
+</body>
+</html>
