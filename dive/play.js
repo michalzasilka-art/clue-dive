@@ -191,13 +191,19 @@ function drawWait(m) {
   drawPods('waiting'); $('#waitName').textContent = me.name;
   if (m) $('#waitTop').textContent = m.topic ? 'YOU\'RE IN THE CREW! · ' + m.topic.toUpperCase() : 'YOU\'RE IN THE CREW!';
 }
-function onWait(m) { clearInterval(tbarT); drawWait(m); atDepth(m.y); show('wait'); }
+function onWait(m) {
+  clearInterval(tbarT); drawWait(m); atDepth(m.y); show('wait');
+  if (m.boss) { $('#waitTop').textContent = 'BOSS BATTLE!'; $('#waitMsg').innerHTML = `${esc(m.boss.name)} BLOCKS THE WAY!<br>ANSWER RIGHT TO FIRE TORPEDOES!`; buzz([80, 60, 80]); }
+  else $('#waitMsg').innerHTML = 'FIND YOUR WINDOW IN THE SUBMARINE<br>ON THE BIG SCREEN!';
+}
 function onQ(m) {
   cur = m; picked = m.got ?? null;
   $('#pNum').textContent = `${m.n}/${m.total}`;
   $('#pScore').textContent = (m.me ? m.me.coins || 0 : 0) + ' ¢';
   $('#pclueText').textContent = m.desc;
   $('#pMon').style.left = ((1 - m.mon) * 100) + '%';
+  $('#monHint').textContent = m.boss ? `BOSS BATTLE! RIGHT ANSWERS FIRE TORPEDOES AT ${m.boss.name}!` : 'ANSWER FAST TO CALL A SEA MONSTER!';
+  document.body.classList.toggle('battle', !!m.boss);
   $('#pans').innerHTML = m.opts.map((o, k) => `<button class="pbtn px opt-${LETTERS[k]} pop" style="animation-delay:${k * .08}s" data-k="${k}"><span class="shape"></span><span>${esc(o)}</span></button>`).join('');
   $('#locked').hidden = picked == null;
   markPicked(); atDepth(m.y);
@@ -205,7 +211,7 @@ function onQ(m) {
   const end = performance.now() + m.left, bar = $('#tbar');
   clearInterval(tbarT);
   const step = () => {
-    const f = Math.max(0, (end - performance.now()) / m.dur), mon = f > 1 - m.mon;
+    const f = Math.max(0, (end - performance.now()) / m.dur), mon = m.boss ? f > 0 : f > 1 - m.mon;
     bar.style.width = (Math.round(f * 20) * 5) + '%'; bar.classList.toggle('low', f < .25); bar.classList.toggle('mon', mon);
     $('#monHint').classList.toggle('gone', !mon || picked != null);
     if (f <= 0) clearInterval(tbarT);
@@ -226,11 +232,16 @@ function onGot(m) { picked = m.choice; markPicked(); $('#locked').hidden = false
 function onRes(m) {
   clearInterval(tbarT); clearInterval(monT);
   const v = $('#verdict');
-  v.textContent = m.ok ? (m.mon ? 'MONSTER!' : 'RIGHT!') : m.none ? 'TIME\'S UP!' : 'OOPS!';
+  v.textContent = m.ok ? (m.torp ? 'TORPEDO HIT!' : m.mon ? 'MONSTER!' : 'RIGHT!') : m.none ? 'TIME\'S UP!' : 'OOPS!';
   v.className = 'verdict pop ' + (m.ok ? 'ok' : 'no');
   const card = $('#monCard');
-  card.hidden = !m.mon; $('#resPod').hidden = !!m.mon;
-  if (m.mon) {
+  const shown = m.mon || (m.torp && m.torp.boss);
+  card.hidden = !shown; $('#resPod').hidden = !!shown;
+  if (m.torp && m.torp.boss) {
+    $('#monImg').src = monsterURL(m.torp.boss.id); card.querySelector('.lbl').textContent = 'YOUR TORPEDO HIT';
+    $('#monName').textContent = `-${m.torp.dmg} HP · ${m.torp.boss.hp > 0 ? m.torp.boss.hp + ' HP LEFT' : 'DEFEATED!'}`; card.className = 'moncard px t3';
+  } else if (m.mon) {
+    card.querySelector('.lbl').textContent = 'YOU CALLED UP';
     $('#monName').textContent = m.mon.name.toUpperCase();
     $('#monImg').src = monsterURL(m.mon.id);
     card.className = 'moncard px t' + m.mon.tier;
@@ -241,13 +252,15 @@ function onRes(m) {
   const bits = [];
   if (m.ok && m.mon) bits.push(`MONSTER +${m.mon.coins}`);
   if (m.ok && m.bonus) bits.push(`STREAK ×${m.streak} +${m.bonus}`);
+  if (m.torp) bits.push(`TORPEDO +${m.torp.coins}`);
+  if (m.bossWin) bits.push(`BOSS DEFEATED +${m.bossBonus}`);
   $('#resBonus').textContent = bits.join(' · ') || (m.ok ? 'ANSWER FASTER TO CALL A MONSTER!' : '');
   $('#resScore').textContent = m.coins;
   $('#resPlace').textContent = `${ordinal(m.place)}/${m.of}`;
   $('#resHint').textContent = m.last ? 'That was the last clue! Look at the big screen.' : `The submarine is at ${m.depth} m in ${m.zone}. Watch the big screen!`;
   atDepth(m.y);
   show('res');
-  if (m.ok) (m.mon ? sfx.roar : sfx.right)(); else sfx.wrong();
+  if (m.ok) (m.mon || m.torp ? sfx.roar : sfx.right)(); else sfx.wrong();
   buzz(m.ok ? (m.mon ? [60, 40, 60, 40, 120] : [40, 60, 40]) : 200);
 }
 function onEnd(m) {

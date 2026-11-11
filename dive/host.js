@@ -21,6 +21,8 @@ $('#app').innerHTML = `
 <div class="stage" id="worldStage"><canvas id="world"></canvas>
   <div id="subWrap"><img id="hull" alt=""><div id="ports"></div><div id="extraCrew"></div></div>
   <div id="mons"></div>
+  <div id="boss" hidden><div class="bhp px"><b id="bossName">THE KRAKEN</b><div class="bbar"><i id="bossBar"></i></div><span id="bossHp"></span></div><div class="bbody"><img id="bossImg" alt=""></div></div>
+  <div id="torps"></div>
   <div id="gauge"><div class="rail"></div><div id="gaugeZones"></div><div id="gaugeSub"><span id="gaugeM">0 m</span></div></div>
   <div id="zoneBanner" hidden></div><div id="monBanner" hidden></div></div>
 <div class="corner"><button class="btn px ghost" id="menuBtn" title="Back to the start menu">MENU</button><button class="btn px ghost" id="muteBtn" title="Sound on/off">SOUND ON</button></div>
@@ -82,6 +84,11 @@ $('#app').innerHTML = `
   <button class="btn px green" id="flyNext">NEXT CLUE</button>
 </div></section>
 
+<section class="screen" id="battle" hidden><div class="stage">
+  <div class="battle-card px"><small>BOSS BATTLE!</small><h1 id="battleName">THE KRAKEN</h1><p id="battleText">blocks the way down!</p>
+  <div class="battle-how">Answer right to fire a <b>torpedo</b>. Fast answers hit harder.<br>Defeat it in <b id="battleRounds">3</b> clues for a big bonus!</div></div>
+</div></section>
+
 <section class="screen" id="podium" hidden><div class="stage">
   <h1 class="logo">WINNERS!</h1>
   <div class="deepest px" id="deepest"></div>
@@ -138,6 +145,9 @@ function toast(text, ms = 3500) {
 const players = new Map();   // pid → { pid, name, char, hat, coins, streak, best, online, last, seat, mons: [], joined }
 let net = null, phase = 'setup', rounds = [], qi = -1, qStart = 0, qDur = 20000, answers = new Map(), timerT = null, topicTitle = '';
 let lastTick = -1, closeT = null, seats = 0, lastZone = '', subY = START_Y, subShown = START_Y, stepY = 200, diveT = null;
+// the boss battle: half way down a giant monster blocks the way for up to 3 clues; right answers fire torpedoes at it
+let boss = null, bossAt = -1, battleN = 3, subShift = 0;
+const TORP_COINS = 15, BOSS_BONUS = 60;
 const cleanName = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 14) || 'Player';
 const validChar = validCrew, validHat = () => 'none';
 const list = () => [...players.values()];
@@ -153,7 +163,7 @@ function pickMonster(tier, y) {
 }
 function qMessage() {
   const r = rounds[qi];
-  return { type: 'q', n: qi + 1, total: rounds.length, desc: r.desc, opts: r.opts, left: Math.max(0, qDur - (performance.now() - qStart)), dur: qDur, mon: MON_FRAC, y: subY };
+  return { type: 'q', n: qi + 1, total: rounds.length, desc: r.desc, opts: r.opts, left: Math.max(0, qDur - (performance.now() - qStart)), dur: qDur, mon: MON_FRAC, y: subY, boss: battling() ? { name: boss.name, hp: boss.hp, max: boss.max } : null };
 }
 const meOf = (p) => ({ name: p.name, char: p.char, hat: p.hat, coins: p.coins, streak: p.streak, mons: p.mons.length });
 function screenFor(pid) {
@@ -201,9 +211,10 @@ function pickRounds() {
   const n = prefs.rounds ? Math.min(prefs.rounds, words.length) : words.length;
   rounds = shuffle(words).slice(0, n).map(([word, desc, w1, w2]) => { const opts = shuffle([word, w1, w2]); return { word, desc, opts, right: opts.indexOf(word) }; });
   stepY = (END_Y - START_Y) / Math.max(1, rounds.length);   // a perfect round sinks one step; a perfect game lands by the treasure
+  bossAt = rounds.length >= 4 ? Math.floor(rounds.length / 2) : -1; battleN = Math.min(3, rounds.length - Math.max(0, bossAt));
 }
 function goLobby() {
-  phase = 'lobby'; qi = -1; pickRounds(); lastZone = ZONES[0][0]; subY = subShown = START_Y;
+  phase = 'lobby'; qi = -1; pickRounds(); lastZone = ZONES[0][0]; subY = subShown = START_Y; endBoss(true);
   for (const p of players.values()) { p.coins = 0; p.streak = 0; p.best = 0; p.last = null; p.mons = []; }
   clearMonsters(true);
   $('#lobbyTopic').textContent = `${topicTitle} · ${rounds.length} clues · ${prefs.secs}s`;
@@ -275,7 +286,7 @@ function popTag(p, text, ms = 2600) {
 // where the submarine is (world units): centred, the middle of its body at subShown; a big crew gets a longer one
 const subBox = () => {
   const w = Math.min(290, 150 + Math.max(0, hull.cols - 4) * 16), k = w / SUB.w, h = SUB.h * k, [, by0, , by1] = SUB.body;
-  return { x: W / 2 - w / 2 - 4, y: subShown - (by0 + by1) / 2 * k, w, h, k };
+  return { x: W / 2 - w / 2 - 4 + subShift, y: subShown - (by0 + by1) / 2 * k, w, h, k };
 };
 function lookAtSub(now) { cam.look(subShown - VH * .56, now); }
 
@@ -306,6 +317,8 @@ function clearMonsters(now) { for (const m of mons) { if (now) m.el.remove(); el
 // ---------- every frame: the submarine, the crew, the monsters follow the camera ----------
 let lastSeatT = 0;
 cam.onFrame((camY, t, dk) => {
+  subShift += ((battling() ? -Math.min(70, cam.viewW * .2) : 0) - subShift) * .05;
+  bossFrame(camY, t);
     const sb = subBox(), vw = cam.viewW, x0 = (W - vw) / 2;
   const wrap = $('#subWrap');
   const bob = Math.sin(t / 900) * 1.2 + (subShown <= START_Y + 1 ? Math.sin(t / 600) * 1.4 : 0), tilt = diveT ? 3 : Math.sin(t / 1300) * .8;
@@ -348,13 +361,94 @@ cam.onFrame((camY, t, dk) => {
 });
 $('#gaugeZones').innerHTML = ZONES.map(([name, top], i) => { const bot = ZONES[i + 1] ? ZONES[i + 1][1] : WH; return `<div class="gz" style="top:${(top / WH * 100).toFixed(2)}%;height:${((bot - top) / WH * 100).toFixed(2)}%"><span>${esc(name)}</span></div>`; }).join('');
 
+// ---------- the boss battle ----------
+function startBattle(i) {
+  const id = pickMonster(3, subY), m = monsterById(id), crew = Math.max(1, list().filter((p) => p.online).length);
+  boss = { id, name: m.name.toUpperCase(), max: Math.max(4, Math.round(crew * battleN * 1.25)), round: 0, over: false, dead: false };
+  boss.hp = boss.max;
+  phase = 'intro';
+  $('#battleName').textContent = boss.name; $('#battleRounds').textContent = battleN;
+  $('#bossImg').src = monsterURL(id); $('#bossName').textContent = boss.name; drawBossHp();
+  const b = $('#boss'); b.hidden = false; b.className = 'arrive';
+  show('battle'); sfx.roar(); setTimeout(() => sfx.roar(), 700);
+  const st = $('#worldStage'); st.classList.remove('shake'); void st.offsetWidth; st.classList.add('shake');
+  if (net) for (const p of players.values()) net.send(p.pid, { type: 'wait', me: meOf(p), topic: topicTitle, y: subY, boss: { name: boss.name, max: boss.max, rounds: battleN } });
+  setTimeout(() => { if (phase === 'intro' && net) startQuestion(i); }, 3800);
+}
+function drawBossHp() {
+  if (!boss) return;
+  $('#bossBar').style.width = (Math.max(0, boss.hp) / boss.max * 100).toFixed(1) + '%';
+  $('#bossBar').classList.toggle('low', boss.hp / boss.max < .3);
+  $('#bossHp').textContent = `${Math.max(0, boss.hp)} / ${boss.max} HP`;
+}
+const torps = [];
+function fireTorpedo(p, dmg) {
+  const el = document.createElement('div'); el.className = 'torp d' + dmg;
+  el.innerHTML = `<i></i><span class="ttag">${esc(p.name)}</span>`;
+  $('#torps').appendChild(el); torps.push({ el, p, dmg, t0: performance.now() + Math.random() * 120 });
+  sfx.pop(); setTimeout(() => sfx.tap(), 120);
+}
+let bossBox = null;
+function bossFrame(camY, t) {
+  if (!boss || $('#boss').hidden) { for (const tp of torps.splice(0)) tp.el.remove(); return; }
+  const vw = cam.viewW, x0 = (W - vw) / 2, sb = subBox(), w = vw * .4;
+  const cx = x0 + vw * .74, cy = sb.y + sb.h * .55 + Math.sin(t / 1300) * 4;
+  bossBox = { x: cx, y: cy, w };
+  const b = $('#boss');
+  b.style.left = ((cx - w / 2 - x0) / vw * 100) + '%'; b.style.top = ((cy - camY) / VH * 100) + '%'; b.style.width = (w / vw * 100) + '%';
+  // torpedoes: from the submarine's nose to the boss, a little arc
+  for (let i = torps.length - 1; i >= 0; i--) {
+    const tp = torps[i], k = (t - tp.t0) / 700;
+    if (k < 0) continue;
+    const fx = sb.x + sb.w * .95, fy = sb.y + sb.h * .55, tx = cx - w * .15, ty = cy + (tp.p.seat % 3 - 1) * 8;
+    const e = Math.min(1, k), x = fx + (tx - fx) * e, y = fy + (ty - fy) * e - Math.sin(e * Math.PI) * 10;
+    tp.el.style.left = ((x - x0) / vw * 100) + '%'; tp.el.style.top = ((y - camY) / VH * 100) + '%';
+    if (k >= 1) { torps.splice(i, 1); tp.el.remove(); hitBoss(tp.p, tp.dmg, x, y); }
+  }
+}
+function hitBoss(p, dmg, x, y) {
+  if (!boss || boss.dead) return;
+  boss.hp -= dmg; drawBossHp();
+  const vw = cam.viewW, x0 = (W - vw) / 2;
+  const boom = document.createElement('div'); boom.className = 'boom d' + dmg; boom.innerHTML = `<b>-${dmg}</b><span>${esc(p.name)}</span>`;
+  boom.style.left = ((x - x0) / vw * 100) + '%'; boom.style.top = ((y - cam.y) / VH * 100) + '%';
+  $('#torps').appendChild(boom); setTimeout(() => boom.remove(), 1400);
+  cam.burst(x, y, 10 + dmg * 6); sfx.splash();
+  const b = $('#boss'); b.classList.remove('hit'); void b.offsetWidth; b.classList.add('hit');
+  if (boss.hp <= 0) defeatBoss();
+}
+function defeatBoss() {
+  boss.dead = true; boss.over = true; boss.hp = 0; drawBossHp();
+  const hitters = new Set([...answers.entries()].filter(([, a]) => a.dmg).map(([pid]) => pid));
+  for (const p of players.values()) if (p.hitBoss || hitters.has(p.pid)) { p.coins += BOSS_BONUS; p.bossWin = true; }
+  const b = $('#boss'); b.classList.remove('hit'); b.classList.add('dead');
+  setTimeout(() => { b.hidden = true; b.className = ''; }, 2200);
+  banner('#monBanner', `THE CLASS DEFEATED ${boss.name}!`, 3400); sfx.fanfare(); confetti(2500);
+  if (bossBox) cam.burst(bossBox.x, bossBox.y, 60);
+  subY = Math.min(END_Y, subY + stepY * 1.5);   // the way is free: the submarine dives on, a little extra
+}
+function bossStrikes() {
+  if (!battling()) return;
+  const b = $('#boss'); b.classList.remove('lunge'); void b.offsetWidth; b.classList.add('lunge');
+  setTimeout(() => { sfx.roar(); const st = $('#worldStage'); st.classList.remove('shake'); void st.offsetWidth; st.classList.add('shake'); $('#subWrap').classList.remove('hurt'); void $('#subWrap').offsetWidth; $('#subWrap').classList.add('hurt'); }, 350);
+}
+function bossEscapes() {
+  boss.over = true;
+  const b = $('#boss'); b.classList.add('flee');
+  banner('#monBanner', `${boss.name} GOT AWAY!`, 3000);
+  setTimeout(() => { b.hidden = true; b.className = ''; }, 2000);
+}
+function endBoss() { boss = null; const b = $('#boss'); if (b) { b.hidden = true; b.className = ''; } for (const tp of torps.splice(0)) tp.el.remove(); for (const p of players.values()) { p.hitBoss = false; p.bossWin = false; p.bossWinShown = false; } }
+
 // ---------- a round: the clue ----------
 $('#startBtn').onclick = () => {
   unlock(); music(false); sfx.dive(); sfx.splash();
   startQuestion(0);
 };
+const battling = () => !!(boss && !boss.over);
 function startQuestion(i) {
   clearTimeout(closeT);
+  if (i === bossAt && !boss) { startBattle(i); return; }
   qi = i; phase = 'q'; answers = new Map(); qDur = prefs.secs * 1000; qStart = performance.now(); lastTick = -1;
   const r = rounds[qi];
   $('#qNum').textContent = `CLUE ${qi + 1} / ${rounds.length}`;
@@ -372,7 +466,7 @@ function tickTimer() {
   const left = Math.max(0, qDur - (performance.now() - qStart)), s = Math.ceil(left / 1000);
   $('#timerN').textContent = s; $('#timer').classList.toggle('low', s <= 5);
   $('#timer').classList.toggle('montime', left / qDur > 1 - MON_FRAC);
-  $('#clueHint').textContent = left / qDur > 1 - MON_FRAC ? 'ANSWER FAST ON YOUR PHONE TO CALL A SEA MONSTER!' : 'ANSWER ON YOUR PHONE!';
+  $('#clueHint').textContent = battling() ? 'BOSS BATTLE! ANSWER RIGHT TO FIRE A TORPEDO, FAST ONES HIT HARDER!' : left / qDur > 1 - MON_FRAC ? 'ANSWER FAST ON YOUR PHONE TO CALL A SEA MONSTER!' : 'ANSWER ON YOUR PHONE!';
   $('#timerBar').style.height = (left / qDur * 100).toFixed(1) + '%';
   if (s !== lastTick) { if (s <= 5 && s > 0) sfx.tick(); lastTick = s; }
   if (left <= 0) { showResults(); return; }
@@ -387,11 +481,14 @@ function answer(pid, m) {
   const choice = m.choice | 0; if (choice < 0 || choice > 2) return;
   const t = performance.now() - qStart, p = players.get(pid), ok = choice === rounds[qi].right;
   const fast = 1 - t / qDur, tier = ok && t < qDur * MON_FRAC ? (fast > .8 ? 3 : fast > .6 ? 2 : 1) : 0;
-  const mon = tier ? pickMonster(tier, subY) : null;
-  answers.set(pid, { choice, t, tier, mon });
+  const war = battling();
+  const mon = tier && !war ? pickMonster(tier, subY) : null;
+  const dmg = war && ok ? (fast > .8 ? 3 : fast > .6 ? 2 : 1) : 0;
+  answers.set(pid, { choice, t, tier: war ? 0 : tier, mon, dmg });
   net.send(pid, { type: 'got', choice });
   sfx.tap(); drawAnswered();
   if (mon) summon(p, mon, tier);   // a fast right answer: a sea monster bursts out of the dark
+  if (dmg) { p.hitBoss = true; fireTorpedo(p, dmg); }      // in the boss battle: a torpedo
   if (!list().some((x) => x.online && !answers.has(x.pid))) { clearTimeout(closeT); closeT = setTimeout(() => { if (phase === 'q') showResults(); }, 1400); }
 }
 $('#qSkip').onclick = () => { if (phase === 'q') showResults(); };
@@ -400,7 +497,8 @@ $('#qSkip').onclick = () => { if (phase === 'q') showResults(); };
 function resultFor(pid) {
   const p = players.get(pid), r = rounds[qi] || rounds[rounds.length - 1], l = p.last || { none: true };
   const m = l.mon ? monsterById(l.mon) : null;
-  return { ok: !!l.ok, none: !!l.none, word: r.word, gain: l.gain || 0, bonus: l.bonus || 0, mon: m ? { id: m.id, name: m.name, tier: m.tier, coins: l.monCoins } : null, pts: l.pts || 0, coins: p.coins, streak: p.streak, place: placeOf(pid), of: players.size, last: qi === rounds.length - 1, zone: zoneAt(subY), depth: depthM(subY), y: subY };
+  return { ok: !!l.ok, none: !!l.none, word: r.word, gain: l.gain || 0, bonus: l.bonus || 0, mon: m ? { id: m.id, name: m.name, tier: m.tier, coins: l.monCoins } : null, pts: l.pts || 0,
+    torp: l.dmg ? { dmg: l.dmg, coins: l.torp, boss: boss ? { id: boss.id, name: boss.name, hp: boss.hp, max: boss.max } : null } : null, bossWin: !!(boss && boss.dead && p.bossWin && !p.bossWinShown && (p.bossWinShown = true)), bossBonus: BOSS_BONUS, coins: p.coins, streak: p.streak, place: placeOf(pid), of: players.size, last: qi === rounds.length - 1, zone: zoneAt(subY), depth: depthM(subY), y: subY };
 }
 function showResults() {
   if (phase !== 'q') return;
@@ -414,20 +512,23 @@ function showResults() {
     counts[a.choice]++;
     if (a.choice === r.right) {
       right++; p.streak++; p.best = Math.max(p.best, p.streak);
-      const gain = r5(50 + 50 * Math.max(0, 1 - a.t / qDur)), bonus = p.streak >= 2 ? 10 * (Math.min(p.streak, 5) - 1) : 0, monCoins = MON_BONUS[a.tier || 0];
+      const gain = r5(50 + 50 * Math.max(0, 1 - a.t / qDur)), bonus = p.streak >= 2 ? 10 * (Math.min(p.streak, 5) - 1) : 0, monCoins = MON_BONUS[a.tier || 0], torp = (a.dmg || 0) * TORP_COINS;
       if (a.mon) p.mons.push(a.mon);
-      p.coins += gain + bonus + monCoins; p.last = { ok: true, gain, bonus, monCoins, mon: a.mon, pts: gain + bonus + monCoins };
+      p.coins += gain + bonus + monCoins + torp; p.last = { ok: true, gain, bonus, monCoins, mon: a.mon, dmg: a.dmg || 0, torp, pts: gain + bonus + monCoins + torp };
     } else { p.streak = 0; p.last = { ok: false }; }
   }
   // how deep this round takes the class: more right answers, deeper (always a little)
   const crew = Math.max(1, list().filter((p) => p.online || answers.has(p.pid)).length), share = right / crew;
-  subY = Math.min(END_Y, subY + stepY * (.3 + .7 * share));
+  if (battling()) {   // the boss blocks the way: no diving; wrong or missing answers let it strike the submarine
+    boss.round++;
+    if (right < crew) setTimeout(bossStrikes, 900);
+  } else subY = Math.min(END_Y, subY + stepY * (.3 + .7 * share));
   $('#rpWord').textContent = r.word.toUpperCase();
   $('#rpClue').textContent = r.desc;
   const max = Math.max(1, ...counts);
   $('#bars').innerHTML = r.opts.map((o, k) => `<div class="bar-row${k === r.right ? ' win' : ' lose'}"><span class="bw opt-${LETTERS[k]} px"><span class="shape"></span>${esc(o)}</span><span class="bt"><i class="opt-${LETTERS[k]}" style="--w:${(counts[k] / max * 100).toFixed(0)}%"></i></span><b>${counts[k]}</b></div>`).join('');
-  const nMon = list().filter((p) => p.last && p.last.mon).length;
-  $('#rpSum').textContent = `${counts[r.right]} OF ${answers.size} GOT IT RIGHT` + (nMon ? ` · ${nMon} SEA MONSTER${nMon > 1 ? 'S' : ''}!` : '');
+  const nMon = list().filter((p) => p.last && p.last.mon).length, nTorp = list().filter((p) => p.last && p.last.dmg).length;
+  $('#rpSum').textContent = `${counts[r.right]} OF ${answers.size} GOT IT RIGHT` + (nTorp ? ` · ${nTorp} TORPEDO HIT${nTorp > 1 ? 'S' : ''}!` : nMon ? ` · ${nMon} SEA MONSTER${nMon > 1 ? 'S' : ''}!` : '');
   $('#resNext').textContent = 'DIVE!';
   show('results'); sfx.reveal();
   for (const p of players.values()) net.send(p.pid, { type: 'res', me: meOf(p), ...resultFor(p.pid) });
@@ -443,6 +544,8 @@ function dive() {
   $('#monPanel').innerHTML = best
     ? `<h2>BIGGEST MONSTER</h2><div class="sp"><img class="mon-mini" src="${monsterURL(best.last.mon)}" alt=""><div><b>${esc(best.name)}</b><span class="fire">${esc(monsterById(best.last.mon).name.toUpperCase())}</span><small>+${best.last.monCoins} COINS</small></div></div>`
     : '<h2>BIGGEST MONSTER</h2><div class="sp"><small>NO MONSTER THIS TIME: ANSWER FASTER!</small></div>';
+  if (battling()) $('#monPanel').innerHTML = `<h2>BOSS BATTLE</h2><div class="sp"><img class="mon-mini" src="${monsterURL(boss.id)}" alt=""><div><b>${esc(boss.name)}</b><span class="fire">${boss.hp} / ${boss.max} HP LEFT</span><small>${Math.max(0, battleN - boss.round)} CLUE${battleN - boss.round === 1 ? '' : 'S'} LEFT TO DEFEAT IT</small></div></div>`;
+  if (boss && !boss.over && boss.round >= battleN) bossEscapes();
   $('#flyNext').textContent = qi === rounds.length - 1 ? 'RESULTS' : 'NEXT CLUE';
   show('fly'); sfx.dive();
   clearMonsters(false);
@@ -496,4 +599,6 @@ window.CD = {   // for testing in the browser console
   jump(y) { subY = subShown = y; lookAtSub(true); },
   fake(n) { for (let i = 0; i < n; i++) { const k = players.size, pid = 'fake' + k; players.set(pid, { pid, name: 'Kid ' + (k + 1), char: CREW[k % CREW.length].id, hat: 'none', coins: 0, streak: 0, best: 0, joined: performance.now(), last: null, seat: seats++, mons: [], online: true }); } buildSub(); },
   screen(id) { phase = id; show(id); },
+  get boss() { return boss; }, get bossAt() { return bossAt; },
+  battle(i = 0) { startBattle(i); }, fire(name, dmg = 2) { const p = { name, seat: (Math.random() * 6) | 0 }; fireTorpedo(p, dmg); }, strike() { bossStrikes(); },
 };
