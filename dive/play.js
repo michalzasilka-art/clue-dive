@@ -4,16 +4,14 @@
 // final. Behind it all, the ocean at the depth the class has reached.
 import { $, $$, esc, store, show, ordinal } from './ui.js';
 import { ocean, zoneAt, depthM } from './ocean.js';
-import { Pix, monsterURL } from './sea-art.js';
-import { HEROES, HATS, heroURL, heroFrame, artReady, hatURL, heroFace } from './sprites.js';
+import { CREW, crewURL, validCrew, monsterURL, artURL } from './crew.js';
 import { joinGame, cleanCode } from './net.js';
 import { sfx, unlock } from './sound.js';
 
 const cam = ocean($('#sky'), { phone: true });
 const LETTERS = ['a', 'b', 'c'];
-// a big riveted porthole frame (transparent inside) to look at your hero through
-const RING = (() => { const P = new Pix(50, 50); P.circ(25, 25, 24, '#a8b4d8'); P.circ(25, 25, 19, null); for (let k = 0; k < 12; k++) { const a = k / 12 * Math.PI * 2; P.circ(25 + Math.cos(a) * 21.5, 25 + Math.sin(a) * 21.5, 1.1, { flat: '#fff0b0' }); } const c = P.render(); const g = c.getContext('2d'); g.fillStyle = 'rgba(255,255,255,.3)'; g.fillRect(14, 12, 4, 1); g.fillRect(12, 14, 1, 4); return c.toDataURL(); })();
-const pod = (id) => `<div class="pod ${id}"><div class="window"><img class="px-img phero" alt=""></div><img class="px-img ring" src="${RING}" alt=""></div>`;
+// you, behind a brass porthole of the submarine
+const pod = (id) => `<div class="pod ${id}"><div class="window"><img class="phero" alt=""></div><img class="ring" src="${artURL('porthole')}" alt=""></div>`;
 
 $('#app').innerHTML = `
 <section class="screen" id="menu"><div class="col">
@@ -43,10 +41,8 @@ $('#app').innerHTML = `
   <div class="code-chip px" id="meCode">GAME ------</div>
   ${pod('pick')}
   <div class="card px">
-    <h2>PICK A HERO</h2>
-    <div class="heroes" id="heroes"></div>
-    <h2 style="margin-top:16px">PICK A HAT</h2>
-    <div class="hats" id="hats"></div>
+    <h2>PICK YOUR CREW MEMBER</h2>
+    <div class="heroes crewpick" id="heroes"></div>
     <h2 style="margin-top:16px">YOUR NAME</h2>
     <input class="namebox" id="nameIn" maxlength="14" autocomplete="off" autocapitalize="words" placeholder="Your name">
     <p class="err" id="meErr"></p>
@@ -61,7 +57,7 @@ $('#app').innerHTML = `
   <div class="me-name" id="waitName"></div>
   <div class="wait-msg blink" id="waitMsg">FIND YOUR WINDOW IN THE SUBMARINE<br>ON THE BIG SCREEN!</div>
   <div class="spacer"></div>
-  <button class="btn px ghost" id="changeHero">CHANGE HERO OR HAT</button>
+  <button class="btn px ghost" id="changeHero">CHANGE CREW MEMBER</button>
 </div></section>
 
 <section class="screen" id="q" hidden><div class="col">
@@ -74,7 +70,7 @@ $('#app').innerHTML = `
 
 <section class="screen" id="res" hidden><div class="col">
   <div class="verdict" id="verdict"></div>
-  <div class="moncard px" id="monCard" hidden><div class="lbl">YOU CALLED UP</div><img class="px-img" id="monImg" alt=""><div class="mn" id="monName"></div></div>
+  <div class="moncard px" id="monCard" hidden><div class="lbl">YOU CALLED UP</div><img id="monImg" alt=""><div class="mn" id="monName"></div></div>
   <div class="podwrap" id="resPod">${pod('result')}</div>
   <div class="res-card px"><div class="lbl">THE WORD WAS</div><div class="w" id="resWord"></div><div class="pts" id="resPts"></div><div class="bonus" id="resBonus"></div></div>
   <div class="stats"><div class="px"><span class="tag">COINS</span><b id="resScore">0</b></div><div class="px"><span class="tag">PLACE</span><b id="resPlace">-</b></div></div>
@@ -103,22 +99,15 @@ const saved = store.get('dive-me', null) || { ...store.get('clue-me', {}), code:
 const me = {
   pid: saved.pid || Array.from(crypto.getRandomValues(new Uint8Array(9)), (b) => b.toString(36).padStart(2, '0')).join(''),
   name: saved.name || '',
-  char: HEROES.some((h) => h.id === saved.char) ? saved.char : HEROES[(Math.random() * HEROES.length) | 0].id,
-  hat: HATS.some((h) => h.id === saved.hat) ? saved.hat : 'beanie',
+  char: CREW.some((h) => h.id === saved.char) ? saved.char : CREW[(Math.random() * CREW.length) | 0].id,
+  hat: 'none',
 };
 const save = () => store.set('dive-me', { pid: me.pid, name: me.name, char: me.char, hat: me.hat, code: game ? game.code : saved.code, at: Date.now() });
 let game = null, code = '', editing = false, cur = null, picked = null, tbarT = null, joining = false, monT = null;
 // your hero behind a porthole: face in the middle of the window
 function drawPods(which, mood = 'idle') {
-  const f = heroFace(me.char);
-  for (const el of $$('.pod.' + which)) {
-    const im = el.querySelector('.phero');
-    im.src = heroURL(me.char, { hat: me.hat, scale: 6 });
-    im.style.width = (f.w / 38 * 100) + '%'; im.style.left = ((19 - f.x) / 38 * 100) + '%'; im.style.top = ((17 - f.y) / 38 * 100) + '%';
-    el.dataset.mood = mood;
-  }
+  for (const el of $$('.pod.' + which)) { el.querySelector('.phero').src = crewURL(me.char); el.dataset.mood = mood; }
 }
-setInterval(() => { const t = performance.now(); for (const el of $$('.pod')) if (el.offsetParent) { const im = el.querySelector('.phero'), src = heroURL(me.char, { hat: me.hat, frame: heroFrame(t, 1, el.dataset.mood || 'idle'), scale: 6 }); if (im.getAttribute('src') !== src) im.src = src; } }, 140);
 const atDepth = (y) => { if (typeof y === 'number') cam.look(y - cam.viewH * .5); };
 
 // ---------- the code ----------
@@ -140,17 +129,15 @@ $('#joinBack').onclick = () => { sfx.tap(); show('menu'); };
 
 // ---------- hero, hat and name ----------
 function drawPicks() {
-  $('#heroes').innerHTML = HEROES.map((h) => `<button class="hero${h.id === me.char ? ' on' : ''}${h.ours ? ' ours' : ''}" data-id="${h.id}"><img class="px-img${h.id === me.char ? ' hop' : ''}" src="${heroURL(h.id, { hat: me.hat })}" alt="">${esc(h.name)}</button>`).join('');
-  $('#hats').innerHTML = HATS.map((t) => `<button class="hatb${t.id === me.hat ? ' on' : ''}" data-id="${t.id}" title="${esc(t.name)}"><img class="px-img" src="${hatURL(t.id)}" alt="${esc(t.name)}"></button>`).join('');
+  $('#heroes').innerHTML = CREW.map((h) => `<button class="hero${h.id === me.char ? ' on' : ''}${h.ours ? ' ours' : ''}" data-id="${h.id}"><img class="portrait" src="${crewURL(h.id)}" alt="">${esc(h.name)}</button>`).join('');
   drawPods('pick');
 }
 $('#heroes').addEventListener('click', (e) => { const b = e.target.closest('.hero'); if (!b) return; unlock(); sfx.pick(); me.char = b.dataset.id; drawPicks(); bounce(); });
-$('#hats').addEventListener('click', (e) => { const b = e.target.closest('.hatb'); if (!b) return; unlock(); sfx.pop(); me.hat = b.dataset.id; drawPicks(); bounce(); });
 function bounce() { const f = $('.pod.pick'); f.classList.remove('boing'); void f.offsetWidth; f.classList.add('boing'); }
 function openMe(edit) {
   editing = edit;
   $('#nameIn').value = me.name; $('#meErr').textContent = '';
-  $('#meGo').textContent = edit ? 'SAVE' : 'JOIN THE CREW';
+  $('#meGo').textContent = edit ? 'SAVE' : 'JOIN THE CREW'; me.char = validCrew(me.char);
   $('#meCode').textContent = 'GAME ' + code.slice(0, 3) + ' ' + code.slice(3);
   drawPicks(); show('me');
 }
@@ -245,7 +232,7 @@ function onRes(m) {
   card.hidden = !m.mon; $('#resPod').hidden = !!m.mon;
   if (m.mon) {
     $('#monName').textContent = m.mon.name.toUpperCase();
-    let f = 0; const anim = () => { $('#monImg').src = monsterURL(m.mon.id, f++ % 4, true); }; anim(); monT = setInterval(anim, 160);
+    $('#monImg').src = monsterURL(m.mon.id);
     card.className = 'moncard px t' + m.mon.tier;
   } else drawPods('result', m.ok ? 'cheer' : m.none ? 'idle' : 'sad');
   $('#resWord').textContent = m.word;
@@ -270,7 +257,7 @@ function onEnd(m) {
   drawPods('final', m.place <= 3 ? 'cheer' : 'idle');
   $('#endPlace').textContent = `${ordinal(m.place)}/${m.of}`;
   $('#endScore').textContent = m.coins;
-  $('#endMons').innerHTML = m.mons && m.mons.length ? `<small>YOUR MONSTERS</small><div>${m.mons.map((id) => `<img class="px-img" src="${monsterURL(id, 0, true)}" alt="">`).join('')}</div>` : '<small>NO MONSTERS THIS TIME</small>';
+  $('#endMons').innerHTML = m.mons && m.mons.length ? `<small>YOUR MONSTERS</small><div>${m.mons.map((id) => `<img src="${monsterURL(id)}" alt="">`).join('')}</div>` : '<small>NO MONSTERS THIS TIME</small>';
   $('#endDepth').textContent = m.floor ? `Your class reached the Lost City at ${m.depth} m and found the treasure!` : `Your class dived to ${m.depth} m (${m.zone}).`;
   show('end');
   if (m.place <= 3) sfx.fanfare();
@@ -284,7 +271,7 @@ $('#menuBoard').onclick = () => { unlock(); sfx.tap(); location.href = new URL('
 // ---------- start: straight in from the QR code (?code=123456), back in after a reload, or the menu ----------
 const urlCode = cleanCode(new URLSearchParams(location.search).get('code'));
 drawDigits();
-artReady.then(() => { if (document.body.dataset.screen === 'me') drawPicks(); for (const w of ['waiting', 'result', 'final']) drawPods(w); });
+for (const w of ['waiting', 'result', 'final']) drawPods(w);
 if (urlCode.length === 6) {
   code = urlCode; codeIn.value = urlCode; drawDigits();
   if (me.name && saved.code === urlCode && Date.now() - (saved.at || 0) < 3 * 3600e3) { openMe(false); connect(); }

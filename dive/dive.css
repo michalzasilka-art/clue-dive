@@ -766,3 +766,86 @@ body[data-screen="lobby"] #gauge, body[data-screen="question"] #gauge, body[data
 #menuBoard { margin-top: 10px; font-size: 11px; }
 body[data-screen="podium"] #subWrap, body[data-screen="podium"] #mons { display: none; }
 .deepest { left: calc(2.4 * var(--u)); top: calc(2.4 * var(--u)); transform: none; white-space: normal; max-width: calc(30 * var(--u)); text-align: left; font-size: calc(1.2 * var(--u)); }
+
+/* =================================== CLUE DIVE · ILLUSTRATED (no pixels) =================================== */
+:root { --t: 'Lilita One', 'Arial Rounded MT Bold', system-ui, sans-serif; --b: 'Nunito', system-ui, sans-serif; --s: 'Lilita One', system-ui, sans-serif; }
+body { -webkit-font-smoothing: antialiased; font-weight: 800; }
+body *, body *::before, body *::after { letter-spacing: .01em !important; }
+#world, #sky, .px-img, img { image-rendering: auto !important; }
+/* panels and buttons: rounded, outlined, a soft drop (the pixel notches collapse to nothing) */
+.px { --p: 0px !important; border-radius: 16px; outline: 3px solid var(--bc, #0a1a40); filter: drop-shadow(0 5px 0 rgba(6, 12, 40, .35)); }
+.is-host .px { border-radius: calc(1.2 * var(--u)); outline-width: calc(.25 * var(--u)); }
+.btn { border-radius: 999px !important; background-image: linear-gradient(rgba(255, 255, 255, .28), rgba(255, 255, 255, 0) 55%); }
+.btn.green { --bg: #ff5aa8; color: #fff; text-shadow: 0 2px 0 rgba(120, 10, 70, .5); }
+.pbtn { border-radius: 18px !important; }
+.logo { font-family: var(--t); color: #ffd23a; -webkit-text-stroke: .045em #0a2a62; paint-order: stroke fill; text-shadow: 0 .07em 0 #0a2a62, 0 .14em .25em rgba(0, 10, 40, .45); }
+.logo i { color: #5ee8f4; }
+.is-player .logo { font-size: 46px; }
+.is-player .logo.big { font-size: 66px; }
+#setup .logo { font-size: calc(7 * var(--u)); }
+.portrait { border-radius: 50%; object-fit: cover; aspect-ratio: 1; background: #1e2c58; box-shadow: 0 0 0 3px #fff, 0 3px 8px rgba(0, 0, 0, .3); }
+.set .portrait, .rank .portrait, .crewlist .portrait, .streak-panel .portrait { box-shadow: 0 0 0 2px #fff; }
+
+/* the submarine: the painted hull, brass portholes on it with the crew's faces */
+#subWrap { aspect-ratio: auto; transform-origin: 50% 60%; transition: rotate .8s ease-out; }
+#hull { position: relative !important; display: block; width: 100%; height: auto; filter: drop-shadow(0 calc(.6 * var(--u)) calc(.8 * var(--u)) rgba(0, 10, 40, .35)); }
+#ports { position: absolute; inset: 0; z-index: 3; }
+.port { position: absolute; aspect-ratio: 1; }
+.port .face { position: absolute; left: calc(50% - var(--hole) * 50%); top: calc(50% - var(--hole) * 50%); width: calc(var(--hole) * 100%); height: calc(var(--hole) * 100%); border-radius: 50%; overflow: hidden; background: #1e2c58; }
+.port .face img { width: 100%; height: 100%; object-fit: cover; display: block; animation: crewbob 3.4s ease-in-out infinite alternate; animation-delay: var(--d, 0s); }
+.port .face::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 32% 26%, rgba(255, 255, 255, .45), rgba(255, 255, 255, 0) 32%), radial-gradient(circle at 50% 50%, rgba(80, 160, 255, 0) 60%, rgba(10, 40, 90, .35)); }
+.port .ring { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; }
+.port.off .face img { filter: grayscale(1) brightness(.55); }
+.port[data-mood="cheer"] .face img { animation: cheer .45s ease-in-out infinite alternate; }
+.port[data-mood="sad"] .face img { filter: saturate(.45) brightness(.7); animation: droop 1.6s ease-in-out infinite alternate; }
+@keyframes crewbob { from { transform: translateY(-2%) scale(1.06); } to { transform: translateY(3%) scale(1.06); } }
+@keyframes cheer { from { transform: translateY(6%) scale(1.08); } to { transform: translateY(-10%) scale(1.12); } }
+@keyframes droop { from { transform: translateY(6%) rotate(-4deg) scale(1.06); } to { transform: translateY(10%) rotate(4deg) scale(1.06); } }
+.port .lamp { position: absolute; left: 50%; bottom: -14%; width: 20%; height: 20%; transform: translateX(-50%); border-radius: 50%; background: #3a4a7a; box-shadow: 0 0 0 calc(.15 * var(--u)) #0a1a40; opacity: 0; z-index: 3; }
+body[data-screen="question"] .port .lamp { opacity: 1; }
+.port.done .lamp { background: #5ee8f4; box-shadow: 0 0 0 calc(.15 * var(--u)) #0a1a40, 0 0 calc(1 * var(--u)) #5ee8f4; }
+.port .ptag { position: absolute; left: 50%; bottom: 104%; transform: translateX(-50%); z-index: 4; font: calc(1.3 * var(--u))/1.1 var(--t); color: #fff; background: #0a2a62; border-radius: 999px; padding: calc(.25 * var(--u)) calc(.7 * var(--u)) calc(.2 * var(--u)); box-shadow: 0 0 0 calc(.18 * var(--u)) #fff; white-space: nowrap; opacity: 0; transition: opacity .2s; }
+.port.below .ptag { bottom: auto; top: 108%; }
+body[data-screen="lobby"] .port .ptag { opacity: 1; }
+.port.tagged .ptag { opacity: 1; background: #ffd23a; color: #0a2a62; animation: tagpop .35s ease-out; }
+#extraCrew { position: absolute; right: 16%; top: -10%; font: calc(1.4 * var(--u)) var(--t); color: #fff; -webkit-text-stroke: calc(.12 * var(--u)) #0a2a62; paint-order: stroke fill; }
+
+/* monsters: painted, swimming, arriving with a lunge */
+.mon { animation: arrive .8s cubic-bezier(.2, 1.5, .4, 1) both; }
+.mon .mbody { animation: swim 2.4s ease-in-out infinite alternate; animation-delay: var(--ph, 0s); }
+.mon.t3 .mbody { animation-duration: 3.2s; }
+.mon .mbody img { width: 100%; height: auto; display: block; filter: drop-shadow(0 calc(.5 * var(--u)) calc(.8 * var(--u)) rgba(0, 0, 30, .45)); }
+.mon.flip .mbody img { transform: scaleX(-1); }
+@keyframes swim { from { transform: translateY(-4%) rotate(-2.5deg); } to { transform: translateY(4%) rotate(2.5deg); } }
+@keyframes arrive { from { scale: .35; opacity: 0; } to { scale: 1; opacity: 1; } }
+.mon .mtag { font-family: var(--t); border-radius: 999px; padding: calc(.3 * var(--u)) calc(.9 * var(--u)) calc(.2 * var(--u)); outline: none; filter: none; box-shadow: 0 0 0 calc(.2 * var(--u)) #0a1a40, 0 calc(.4 * var(--u)) 0 rgba(0, 0, 0, .3); }
+#monBanner { font-family: var(--t); border-radius: calc(1.2 * var(--u)); }
+#zoneBanner { font-family: var(--t); border-radius: calc(1.2 * var(--u)); }
+.streak-panel .mon-mini { width: calc(11 * var(--u)) !important; }
+.step .mons img { width: calc(5 * var(--u)) !important; height: auto !important; }
+.crewlist .cm { border-radius: 999px; }
+.crewlist .cm img { width: calc(2.6 * var(--u)); height: calc(2.6 * var(--u)); }
+#gaugeSub, #gaugeSub span { border-radius: calc(.4 * var(--u)); }
+
+/* the phone */
+.pod { width: 176px; }
+.pod .window { left: calc(50% - 37%); top: calc(50% - 37%); width: 74%; height: 74%; box-shadow: none; }
+.pod .phero { position: static; width: 100%; height: 100%; object-fit: cover; }
+.pod .window::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 32% 26%, rgba(255, 255, 255, .45), rgba(255, 255, 255, 0) 32%); }
+.pod[data-mood="cheer"] .phero { animation: cheer .45s ease-in-out infinite alternate; }
+.pod[data-mood="sad"] .phero { filter: saturate(.45) brightness(.7); }
+.crewpick { grid-template-columns: repeat(4, 1fr) !important; }
+.crewpick .hero { border-radius: 14px; padding: 6px 2px 4px; font: 800 11px var(--b); }
+.crewpick .hero img { width: 100%; max-width: 64px; height: auto; margin: 0 auto 2px; }
+.crewpick .hero.on { background: rgba(94, 232, 244, .22); box-shadow: inset 0 0 0 2px #5ee8f4; }
+.moncard { border-radius: 18px; }
+.moncard img { image-rendering: auto; animation: swim 2.2s ease-in-out infinite alternate; }
+.moncard .mn, .verdict { font-family: var(--t); }
+.endmons { border-radius: 16px; }
+.endmons img { height: 40px; }
+.digits span { border-radius: 10px; }
+/* readable on the bright harbour */
+.wait-msg, .me-name, .hint, .tagline, .mode-note { text-shadow: 0 2px 0 #0a2a62, 0 0 10px rgba(6, 20, 60, .85), 0 0 3px #0a2a62 !important; color: #fff !important; }
+.wait-msg { font: 20px/1.3 var(--t) !important; }
+.me-name { font: 30px var(--t) !important; }
+.monhint { font: 13px/1.3 var(--t) !important; color: #ff8ad8 !important; letter-spacing: .03em !important; }

@@ -6,22 +6,20 @@
 // next clue → the podium (coins: right answers, speed, monsters, streaks). This browser is the game.
 import { $, $$, esc, shuffle, store, show, qrCanvas, confetti, ordinal } from './ui.js';
 import { ocean, W, VH, WH, SURFACE, FLOOR, ZONES, zoneAt, depthM } from './ocean.js';
-import { subHull, propeller, MONSTERS, monsterById, monsterURL } from './sea-art.js';
-import { HEROES, HATS, heroURL, heroFrame, artReady, heroFace } from './sprites.js';
+import { CREW, crewURL, validCrew, MONSTERS, monsterById, monsterURL, monsterWidth, aspect, artURL, SPRITES } from './crew.js';
 import { SETS, setById, parseCustom } from './words.js';
 import { hostGame } from './net.js';
 import { sfx, unlock, music, setMuted, isMuted } from './sound.js';
 
 const LETTERS = ['a', 'b', 'c'];
-const SPX = .62;                 // world units per art pixel of the submarine and the monsters
 const MON_FRAC = .6;             // a right answer in the first 60 % of the time summons a monster
 const START_Y = SURFACE + 6;     // the submarine floats at the harbour, half out of the water
 const END_Y = FLOOR - 34;        // a perfect class lands by the treasure
-const img = (id, hat = 'none', cls = '') => `<img class="px-img hero-img ${cls}" src="${heroURL(id, { hat })}" alt="">`;
+const img = (id, _hat, cls = '') => `<img class="portrait ${cls}" src="${crewURL(id)}" alt="">`;
 
 $('#app').innerHTML = `
 <div class="stage" id="worldStage"><canvas id="world"></canvas>
-  <div id="subWrap"><div id="inside"></div><div id="crew"></div><img class="px-img" id="hull" alt=""><img class="px-img" id="prop" alt=""><div id="seatTags"></div><div id="extraCrew"></div></div>
+  <div id="subWrap"><img id="hull" alt=""><div id="ports"></div><div id="extraCrew"></div></div>
   <div id="mons"></div>
   <div id="gauge"><div class="rail"></div><div id="gaugeZones"></div><div id="gaugeSub"><span id="gaugeM">0 m</span></div></div>
   <div id="zoneBanner" hidden></div><div id="monBanner" hidden></div></div>
@@ -92,13 +90,13 @@ $('#app').innerHTML = `
 </div></section>`;
 
 const cam = ocean($('#world'));
-artReady.then(() => { setsHTML(); buildSub(); });
+
 
 // ---------- settings (the same as Clue Quest's) ----------
 const prefs = store.get('dive-host', { set: 'animals', rounds: 10, secs: 20 });
 let custom = store.get('clue-mine', '');
 function setsHTML() {
-  const cards = SETS.map((s) => `<button class="set px${prefs.set === s.id ? ' on' : ''}" data-id="${s.id}">${img(s.icon, s.hat)}<span><b>${esc(s.title)}</b><small>${s.level} · ${s.words.length} WORDS</small></span></button>`);
+  const cards = SETS.map((s, i) => `<button class="set px${prefs.set === s.id ? ' on' : ''}" data-id="${s.id}">${img(CREW[i % CREW.length].id)}<span><b>${esc(s.title)}</b><small>${s.level} · ${s.words.length} WORDS</small></span></button>`);
   const n = parseCustom(custom).words.length;
   cards.push(`<button class="set px${prefs.set === 'mine' ? ' on' : ''}" data-id="mine">${img('charlie', 'tophat')}<span><b>My words</b><small>${n ? n + ' WORDS · EDIT' : 'WRITE YOUR OWN'}</small></span></button>`);
   $('#sets').innerHTML = cards.join('');
@@ -141,8 +139,7 @@ const players = new Map();   // pid → { pid, name, char, hat, coins, streak, b
 let net = null, phase = 'setup', rounds = [], qi = -1, qStart = 0, qDur = 20000, answers = new Map(), timerT = null, topicTitle = '';
 let lastTick = -1, closeT = null, seats = 0, lastZone = '', subY = START_Y, subShown = START_Y, stepY = 200, diveT = null;
 const cleanName = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 14) || 'Player';
-const validChar = (c) => (HEROES.some((h) => h.id === c) ? c : HEROES[0].id);
-const validHat = (h) => (HATS.some((x) => x.id === h) ? h : 'none');
+const validChar = validCrew, validHat = () => 'none';
 const list = () => [...players.values()];
 const ranked = () => list().sort((a, b) => b.coins - a.coins || a.joined - b.joined);
 const placeOf = (pid) => { const me = players.get(pid); return 1 + list().filter((p) => p.coins > me.coins).length; };
@@ -233,51 +230,53 @@ function reseat() { let i = 0; for (const p of list().sort((a, b) => a.seat - b.
 $('#create').onclick = () => { unlock(); sfx.tap(); openGame(); };
 $('#backSetup').onclick = () => { sfx.tap(); music(false); phase = 'setup'; show('setup'); for (const p of players.values()) net.send(p.pid, { type: 'wait', me: meOf(p), topic: '', y: subY }); };
 
-// ---------- the submarine: a hull with a round window for everyone in the crew ----------
-let hull = null, layout = '', seatEls = new Map();
-const PROPS = [0, 1, 2, 3].map((f) => propeller(f).toDataURL());
+// ---------- the submarine: the painted hull with a brass porthole for everyone in the crew ----------
+const SUB = SPRITES.sub || { w: 1200, h: 560, body: [200, 160, 1000, 440] }, HOLE = (SPRITES.porthole || {}).hole || .74;
+let layout = '', hull = { cols: 3, rows: 2 }, seatEls = new Map();
+$('#hull').src = artURL('sub');
 function buildSub() {
   const n = Math.max(4, players.size), rows = n > 26 ? 3 : 2, cols = Math.min(13, Math.max(3, Math.ceil(n / rows)));
   const key = cols + 'x' + rows;
-  if (key !== layout) {
-    layout = key; hull = subHull(cols, rows);
-    $('#hull').src = hull.canvas.toDataURL();
-    const W2 = hull.w;
-    $('#subWrap').style.setProperty('--hw', W2); $('#subWrap').style.setProperty('--hh', hull.h);
-    $('#inside').style.cssText = `left:${(hull.holes[0].x - 10) / W2 * 100}%;right:${(W2 - hull.holes[hull.holes.length - 1].x - 12) / W2 * 100}%;top:${(hull.holes[0].y - 10) / hull.h * 100}%;bottom:${(hull.h - hull.holes[hull.holes.length - 1].y - 10) / hull.h * 100}%`;
-    $('#prop').style.cssText = `left:${(hull.prop.x - 2) / W2 * 100}%;top:${(hull.prop.y - 11.5) / hull.h * 100}%;width:${11 / W2 * 100}%`;
-    seatEls.clear(); $('#crew').innerHTML = ''; $('#seatTags').innerHTML = '';
-  }
-  // seat everyone (join order) in the windows, top row first
-  const shown = list().sort((a, b) => a.seat - b.seat).slice(0, hull.holes.length);
+  if (key !== layout) { layout = key; hull = { cols, rows }; seatEls.clear(); $('#ports').innerHTML = ''; }
+  // the portholes in a grid on the hull's body (measured from the painting), as big as fit
+  const [bx0, by0, bx1, by1] = SUB.body, bw = bx1 - bx0, bh = by1 - by0;
+  const ix0 = bx0 + bw * .1, ix1 = bx1 - bw * .12, iy0 = by0 + bh * .1, iy1 = by1 - bh * .12;
+  const D = Math.min((iy1 - iy0) / rows, (ix1 - ix0) / cols) * .9;
+  const spots = [];
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) spots.push({ x: ix0 + (c + .5) * (ix1 - ix0) / cols + (r % 2 ? (ix1 - ix0) / cols * .18 : 0), y: iy0 + (r + .5) * (iy1 - iy0) / rows });
+  const shown = list().sort((a, b) => a.seat - b.seat).slice(0, spots.length);
   for (const [pid, el] of seatEls) if (!shown.some((p) => p.pid === pid)) { el.remove(); seatEls.delete(pid); }
   shown.forEach((p, i) => {
-    const o = hull.holes[i]; let el = seatEls.get(p.pid);
-    if (!el) {   // the face sits under the hull (seen through the window); the lamp and the name tag above it
-      el = { glass: document.createElement('div'), tag: document.createElement('div') };
-      el.glass.className = 'glass'; el.glass.innerHTML = '<img class="px-img" alt="">'; el.tag.className = 'stag'; el.tag.innerHTML = '<i class="lamp"></i><span class="ptag"></span>';
-      $('#crew').appendChild(el.glass); $('#seatTags').appendChild(el.tag); seatEls.set(p.pid, el);
+    let el = seatEls.get(p.pid);
+    if (!el) {
+      el = document.createElement('div'); el.className = 'port';
+      el.innerHTML = `<div class="face"><img alt=""></div><img class="ring" src="${artURL('porthole')}" alt=""><i class="lamp"></i><span class="ptag"></span>`;
+      $('#ports').appendChild(el); seatEls.set(p.pid, el);
     }
-    for (const b of [el.glass, el.tag]) { b.style.left = ((o.x - o.r) / hull.w * 100) + '%'; b.style.top = ((o.y - o.r) / hull.h * 100) + '%'; b.style.width = (o.r * 2 / hull.w * 100) + '%'; b.style.height = (o.r * 2 / hull.h * 100) + '%'; }
-    const f = heroFace(p.char), im = el.glass.firstChild;
-    im.style.width = (f.w / (o.r * 2) * 100) + '%'; im.style.left = ((o.r - f.x) / (o.r * 2) * 100) + '%'; im.style.top = ((o.r - f.y) / (o.r * 2) * 100) + '%';
-    el.glass.classList.toggle('off', !p.online); el.tag.classList.toggle('below', i >= hull.holes.length / 2);
-    if (!el.tag.classList.contains('tagged')) el.tag.querySelector('.ptag').textContent = p.name;
+    const o = spots[i];
+    el.style.left = ((o.x - D / 2) / SUB.w * 100) + '%'; el.style.top = ((o.y - D / 2) / SUB.h * 100) + '%'; el.style.width = (D / SUB.w * 100) + '%';
+    el.style.setProperty('--hole', HOLE);
+    const im = el.querySelector('.face img'), src = crewURL(p.char); if (im.getAttribute('src') !== src) im.src = src;
+    el.classList.toggle('off', !p.online); el.classList.toggle('below', o.y > (by0 + by1) / 2);
+    if (!el.classList.contains('tagged')) el.querySelector('.ptag').textContent = p.name;
+    el.style.setProperty('--d', (-(p.seat * .37) % 2).toFixed(2) + 's');
   });
   const extra = players.size - shown.length;
   $('#extraCrew').textContent = extra > 0 ? `+${extra} CREW` : '';
 }
+buildSub();
 function popTag(p, text, ms = 2600) {
   setTimeout(() => {
-    const s2 = seatEls.get(p.pid); if (!s2) return;
-    const el = s2.tag, t = el.querySelector('.ptag'); t.textContent = text; el.classList.remove('tagged'); void el.offsetWidth; el.classList.add('tagged');
+    const el = seatEls.get(p.pid); if (!el) return;
+    const t = el.querySelector('.ptag'); t.textContent = text; el.classList.remove('tagged'); void el.offsetWidth; el.classList.add('tagged');
     clearTimeout(el.tagT); el.tagT = setTimeout(() => { el.classList.remove('tagged'); t.textContent = p.name; }, ms);
   }, 60);
 }
-// where the submarine is (world units): centred, its body at subShown
-// a small crew gets a bigger submarine (bigger faces in the windows); a big crew's is long and uses the monsters' pixel size
-const subScale = () => (hull ? Math.max(SPX, Math.min(.9, 150 / hull.w)) : SPX);
-const subBox = () => { const k = subScale(), w = hull ? hull.w * k : 120, h = hull ? hull.h * k : 50; return { x: W / 2 - w / 2 - 6, y: subShown - (hull ? hull.cy : 30) * k, w, h, k }; };
+// where the submarine is (world units): centred, the middle of its body at subShown; a big crew gets a longer one
+const subBox = () => {
+  const w = Math.min(290, 150 + Math.max(0, hull.cols - 4) * 16), k = w / SUB.w, h = SUB.h * k, [, by0, , by1] = SUB.body;
+  return { x: W / 2 - w / 2 - 4, y: subShown - (by0 + by1) / 2 * k, w, h, k };
+};
 function lookAtSub(now) { cam.look(subShown - VH * .56, now); }
 
 // ---------- sea monsters ----------
@@ -292,11 +291,11 @@ function summon(p, id, tier) {
   if (slot == null) { const old = mons.filter((x) => !x.leaving).sort((a, b) => a.born - b.born)[0]; if (old) { old.leaving = performance.now(); slot = old.slot; } else slot = 0; }
   const [sx, sy] = SLOTS[slot], cx = x0 + sx * vw, cy = cam.y + sy * VH;
   const el = document.createElement('div'); el.className = 'mon t' + tier;
-  el.innerHTML = `<img class="px-img" alt=""><span class="mtag px">${esc(p.name)}</span>`;
+  el.innerHTML = `<div class="mbody"><img src="${monsterURL(id)}" alt=""></div><span class="mtag px">${esc(p.name)}</span>`;
   $('#mons').appendChild(el);
-  const size = { crab: 56, eel: 84, jelly: 44, shark: 92, squid: 84, angler: 70, serpent: 130, kraken: 120, leviathan: 160 }[id];
-  const scale = tier === 3 ? .9 : tier === 2 ? .8 : .7, w = size * SPX * scale;
-  const face = cx > W / 2 ? 1 : -1;   // face the submarine
+  const w = monsterWidth(id) * vw;
+  const face = cx > W / 2 ? 1 : -1;   // face the submarine (the pictures face left)
+  el.classList.toggle('flip', face < 0); el.style.setProperty('--ph', (-Math.random() * 2).toFixed(2) + 's');
   const mo = { el, id, slot, x: face > 0 ? W + w : -w, y: cy + (Math.random() - .5) * 20, tx: cx, ty: cy, face, born: performance.now(), leaving: 0, w, tier, p, ph: Math.random() * 6 };
   mons.push(mo);
   setTimeout(() => { sfx.roar(); cam.burst(cx, cy, 24); const st = $('#worldStage'); st.classList.remove('shake'); void st.offsetWidth; st.classList.add('shake'); }, 500);
@@ -307,22 +306,19 @@ function clearMonsters(now) { for (const m of mons) { if (now) m.el.remove(); el
 // ---------- every frame: the submarine, the crew, the monsters follow the camera ----------
 let lastSeatT = 0;
 cam.onFrame((camY, t, dk) => {
-  if (!hull) return;
-  const sb = subBox(), vw = cam.viewW, x0 = (W - vw) / 2;
+    const sb = subBox(), vw = cam.viewW, x0 = (W - vw) / 2;
   const wrap = $('#subWrap');
-  const bob = Math.sin(t / 900) * 1.2 + (subShown <= START_Y + 1 ? Math.sin(t / 600) * 1.4 : 0);
-  wrap.style.left = ((sb.x - x0) / vw * 100) + '%'; wrap.style.top = ((sb.y + bob - camY) / VH * 100) + '%'; wrap.style.width = (sb.w / vw * 100) + '%';
-  const pf = PROPS[((t / (diveT ? 50 : 110)) | 0) % 4]; if ($('#prop').getAttribute('src') !== pf) $('#prop').src = pf;
-  cam.setSub({ x: sb.x + sb.w / 2, y: sb.y + sb.h / 2 + bob, w: sb.w, h: sb.h, lamp: { x: sb.x + hull.lamp.x * sb.k, y: sb.y + hull.lamp.y * sb.k + bob }, prop: { x: sb.x + hull.prop.x * sb.k, y: sb.y + hull.prop.y * sb.k + bob }, moving: !!diveT });
-  // the crew animate: blink, look around, cheer or droop after an answer
-  if (t - lastSeatT > 140) {
+  const bob = Math.sin(t / 900) * 1.2 + (subShown <= START_Y + 1 ? Math.sin(t / 600) * 1.4 : 0), tilt = diveT ? 3 : Math.sin(t / 1300) * .8;
+  wrap.style.left = ((sb.x - x0) / vw * 100) + '%'; wrap.style.top = ((sb.y + bob - camY) / VH * 100) + '%'; wrap.style.width = (sb.w / vw * 100) + '%'; wrap.style.rotate = tilt.toFixed(2) + 'deg';
+  const [, by0, , by1] = SUB.body, midY = sb.y + (by0 + by1) / 2 * sb.k + bob;
+  cam.setSub({ x: sb.x + sb.w / 2, y: midY, w: sb.w, h: sb.h, lamp: { x: sb.x + sb.w * .97, y: midY + 2 }, prop: { x: sb.x + sb.w * .03, y: midY }, moving: !!diveT });
+  // the crew react: a hop for a right answer, a droop for a wrong one, a lamp once they have answered
+  if (t - lastSeatT > 200) {
     lastSeatT = t;
     for (const p of players.values()) {
       const el = seatEls.get(p.pid); if (!el) continue;
-      const mood = phase === 'results' || phase === 'fly' ? (p.last ? (p.last.ok ? 'cheer' : p.last.none ? 'idle' : 'sad') : 'idle') : diveT ? 'rise' : 'idle';
-      const src = heroURL(p.char, { hat: p.hat, frame: heroFrame(t, p.seat, mood), scale: 3 }), im = el.glass.firstChild;
-      if (im.getAttribute('src') !== src) im.src = src;
-      el.tag.classList.toggle('done', phase === 'q' && answers.has(p.pid));
+      const mood = phase === 'results' || phase === 'fly' ? (p.last ? (p.last.ok ? 'cheer' : p.last.none ? 'idle' : 'sad') : 'idle') : 'idle';
+      el.dataset.mood = mood; el.classList.toggle('done', phase === 'q' && answers.has(p.pid));
     }
   }
   // monsters: rush in to their place by the submarine, hover and snap, swim away when the dive starts
@@ -341,8 +337,6 @@ cam.onFrame((camY, t, dk) => {
       if (k >= 1) { m.x = m.tx; m.y = m.ty; }
       x += Math.sin(t / 700 + m.ph) * 3; y += Math.sin(t / 1100 + m.ph) * 4;
     }
-    const fr = ((t / (m.leaving ? 90 : 160) + m.ph * 3) | 0) % 4, src = monsterURL(m.id, fr, m.face < 0);
-    const im = m.el.firstChild; if (im.getAttribute('src') !== src) im.src = src;
     m.el.style.left = ((x - m.w / 2 - x0) / vw * 100) + '%'; m.el.style.top = ((y - camY) / VH * 100) + '%'; m.el.style.width = (m.w / vw * 100) + '%';
     // far from the submarine's lights, deep monsters are dark shapes with glowing eyes
     const dist = Math.hypot(x - (sb.x + sb.w / 2), y - (sb.y + sb.h / 2)) / sb.w;
@@ -447,7 +441,7 @@ function dive() {
   $('#rows').innerHTML = rk.slice(0, 5).map((p, i) => `<div class="rank" style="animation-delay:${.3 + i * .12}s"><span class="pl">${1 + rk.filter((x) => x.coins > p.coins).length}</span>${img(p.char, p.hat)}<span class="nm">${esc(p.name)}</span><span class="sc">${p.coins}</span></div>`).join('');
   const best = list().filter((p) => p.last && p.last.mon).sort((a, b) => monsterById(b.last.mon).tier - monsterById(a.last.mon).tier || b.last.pts - a.last.pts)[0];
   $('#monPanel').innerHTML = best
-    ? `<h2>BIGGEST MONSTER</h2><div class="sp"><img class="px-img mon-mini" src="${monsterURL(best.last.mon, 0)}" alt=""><div><b>${esc(best.name)}</b><span class="fire">${esc(monsterById(best.last.mon).name.toUpperCase())}</span><small>+${best.last.monCoins} COINS</small></div></div>`
+    ? `<h2>BIGGEST MONSTER</h2><div class="sp"><img class="mon-mini" src="${monsterURL(best.last.mon)}" alt=""><div><b>${esc(best.name)}</b><span class="fire">${esc(monsterById(best.last.mon).name.toUpperCase())}</span><small>+${best.last.monCoins} COINS</small></div></div>`
     : '<h2>BIGGEST MONSTER</h2><div class="sp"><small>NO MONSTER THIS TIME: ANSWER FASTER!</small></div>';
   $('#flyNext').textContent = qi === rounds.length - 1 ? 'RESULTS' : 'NEXT CLUE';
   show('fly'); sfx.dive();
@@ -481,7 +475,7 @@ function podium() {
   const rk = ranked(), top = rk.slice(0, 3), order = [[1, top[1]], [0, top[0]], [2, top[2]]];
   const floor = subY >= END_Y - 1;
   $('#deepest').innerHTML = floor ? `THE CLASS REACHED THE LOST CITY AT ${depthM(subY)} m AND FOUND THE TREASURE!` : `THE CLASS DIVED TO ${depthM(subY)} m: ${esc(zoneAt(subY).toUpperCase())}`;
-  $('#steps').innerHTML = order.filter(([, p]) => p).map(([i, p]) => `<div class="step p${i + 1}">${img(p.char, p.hat, i === 0 ? 'hop' : '')}<div class="nm">${esc(p.name)}</div><div class="sc">${p.coins} coins</div><div class="mons">${p.mons.slice(-6).map((id) => `<img class="px-img" src="${monsterURL(id, 0)}" alt="">`).join('')}</div><div class="blk px">${i + 1}</div></div>`).join('');
+  $('#steps').innerHTML = order.filter(([, p]) => p).map(([i, p]) => `<div class="step p${i + 1}">${img(p.char, p.hat, i === 0 ? 'hop' : '')}<div class="nm">${esc(p.name)}</div><div class="sc">${p.coins} coins</div><div class="mons">${p.mons.slice(-6).map((id) => `<img src="${monsterURL(id)}" alt="">`).join('')}</div><div class="blk px">${i + 1}</div></div>`).join('');
   show('podium'); sfx.fanfare(); confetti(5000); clearMonsters(true); cam.look(WH - VH);   // down to the treasure on the sea floor
   for (const p of players.values()) net.send(p.pid, endFor(p.pid));
 }
@@ -500,6 +494,6 @@ window.CD = {   // for testing in the browser console
   players, get phase() { return phase; }, get subY() { return subY; },
   summon: (name, id, tier) => summon({ name }, id, tier),
   jump(y) { subY = subShown = y; lookAtSub(true); },
-  fake(n) { for (let i = 0; i < n; i++) { const k = players.size, pid = 'fake' + k; players.set(pid, { pid, name: 'Kid ' + (k + 1), char: HEROES[k % HEROES.length].id, hat: HATS[1 + (k % (HATS.length - 1))].id, coins: 0, streak: 0, best: 0, joined: performance.now(), last: null, seat: seats++, mons: [], online: true }); } buildSub(); },
+  fake(n) { for (let i = 0; i < n; i++) { const k = players.size, pid = 'fake' + k; players.set(pid, { pid, name: 'Kid ' + (k + 1), char: CREW[k % CREW.length].id, hat: 'none', coins: 0, streak: 0, best: 0, joined: performance.now(), last: null, seat: seats++, mons: [], online: true }); } buildSub(); },
   screen(id) { phase = id; show(id); },
 };
